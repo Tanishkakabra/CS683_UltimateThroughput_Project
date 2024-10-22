@@ -1,0 +1,52 @@
+List of papers:
+Going the Distance for TLB Prefetching: An Application-driven Study*
+Distance Prefetching
+https://dl.acm.org/doi/pdf/10.5555/545215.545237
+
+
+
+TLB prefetching : Exploiting page table locality for agile TLB prefetching
+TLB entries: Mosaic Pages: Big TLB Reach with Small Pages
+To get the system up and running (Champsim? Something else??)
+Final
+
+
+Project Proposal (Two to three paragraphs with precise problem statement)*
+Aim: To improve Virtual to Physical Address Translation
+Like we’ve discussed in class, Virtual to Physical address translation is a frequent and costly process. We want to avoid that. Ideal system would be 0 TLB miss rate, and we try to improve the TLB to cater to this need.
+TLB prefetching: We explore different prefetching techniques, keeping in mind that TLB lines should not be prefetched as data lines. In particular, prefetching in TLB should ideally take place only at the lowest level of the page table. We will implement and try to improve upon the 2 policies (ATP and SBSP) as proposed in the paper (Agile TLB prefetching) in ChampSim.
+TLB entries: Since TLB size is limited, we try to fit more data in the same TLB. We try to achieve this by reducing the size per a single entry (putting more data in the same space by using some constraints). 
+
+
+
+
+
+
+
+Related works (Any two to three papers appeared in top conferences) *
+Exploiting page table locality for agile TLB prefetching (ISCA 2021)
+Mosaic Pages: Big TLB Reach with Small Pages (ASPLOS 2023)
+
+
+
+What tools, simulators, benchmarks will you use?
+We will try to stick to ChampSim as a simulator, and use its traces as benchmarks. 
+Although the artifact for Mosaic Pages is available, there’s a lot of code to understand, so instead of borrowing code from there, we’d like to implement key ideas directly in ChampSim itself.
+
+
+
+
+Provide deliverables for next three checkpoints: Checkpoint-1: October 20, Checkpoint-2: November 8, Checkpoint-3: November end (as per academic calendar). 
+Checkpoint 1: Implementing the TLB prefetching policies.
+Checkpoint 2: Experimenting with TLB entries (it may need a bit of configuration in ChampSim to be able to handle translation at that level)
+Checkpoint 3: Final results from changing TLB entries, along with a report of our findings.
+
+
+
+Who will do what? Please spell out a tentative division of labor.
+Since checkpoint 1 and checkpoint 2 seem fairly independent, Utkarsh will focus more on the TLB prefetching policies, while Tanishka will focus more on configuring ChampSim to handle the entries. We’ll work together and brainstorm if things don’t go as expected.
+
+
+
+Any specific comments/notes for Biswa keeping your project in mind? *
+

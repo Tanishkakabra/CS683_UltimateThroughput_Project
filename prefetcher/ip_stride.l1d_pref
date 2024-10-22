@@ -1,0 +1,164 @@
+#include "cache.h"
+
+// ------------------------- DO NOT CHANGE -------------------------------- //
+#define IP_TRACKER_COUNT 64           // Number of IP trackers
+#define PREFETCH_DEGREE 5             // Prefetch degree
+// ------------------------- DO NOT CHANGE -------------------------------- //
+
+
+class IP_TRACKER {
+  public:
+    // ------------------------- Define the IP_TRACKER class here ------------------------- //
+    uint64_t ip = -1;
+    int64_t stride = 0; //useless if state = -1. 0 -> 1 if prev stride = new stride. 1 -> 0 if prev stride != new stride
+    int state = -1; // -1 for not yet started, 0 for transient (just observed a stride here), 1 if prev stride = this stride
+    uint64_t prev_addr = 0;
+    uint8_t rrip = 2; //2 at init hehe
+
+    void init(uint64_t ip1, int64_t stride1 = 0, int state1 = -1, uint64_t prev_addr1 = 0, uint8_t rrip1 = 2){
+      ip = ip1;
+      stride = stride1;
+      state = state1;
+      prev_addr = prev_addr1;
+      rrip = rrip1;
+    }
+
+};
+
+IP_TRACKER trackers[IP_TRACKER_COUNT];
+
+int find_empty_tracker_index(){
+  int max_rrip = -1;
+  if (trackers[IP_TRACKER_COUNT-1].ip != -1){ //need to evict one ip
+    //printf("need to evict 1\n");
+    for (int i = 0; i < IP_TRACKER_COUNT; i++){
+      if (trackers[i].rrip == 3)
+        return i;
+      if (trackers[i].rrip > max_rrip)
+        max_rrip = trackers[i].rrip;
+    }
+    // no rrip 3 exists.
+    int ans = -1;
+    for (int i = 0; i < IP_TRACKER_COUNT; i++){
+      trackers[i].rrip += (3 - max_rrip);
+      if (trackers[i].rrip == 3)
+          ans = i;
+    }
+    return ans;
+  }
+  else{
+    for (int i = 0; i < IP_TRACKER_COUNT; i++){
+      if (trackers[i].ip == -1)
+        return i;
+    }
+  }
+  return -1;
+}
+
+int find_this_ip(uint64_t ip){
+  //printf("To begin: \n");
+  for (int i = 0; i < IP_TRACKER_COUNT; i++){
+    //printf("IP in table = %d %d \n", trackers[i].ip, trackers[i].state);
+    if (trackers[i].ip == ip)
+      return i;
+  }
+  return -1;
+}
+
+// ------------------------- Initialize the prefetcher ------------------------- // 
+void CACHE::l1d_prefetcher_initialize() 
+{
+
+	cout << "CPU " << cpu << " L1D IP-based stride prefetcher" << endl;
+
+}
+
+// --------------- This is the main prefetcher operate function ---------------- // 
+void CACHE::l1d_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint8_t critical_ip_flag)
+{
+
+
+  //printf("%d %d %d %d %d \n", addr, ip, cache_hit, type, critical_ip_flag);
+    //                      -83624712 4208293 0        0     0 
+    //                      7126080   4208374 1        0     0 
+
+
+    
+    int tracker_id = find_this_ip(ip);
+    if (tracker_id == -1){ // this ip doesnt yet exist on the list
+      tracker_id = find_empty_tracker_index();
+      trackers[tracker_id].init(ip);
+      if (tracker_id == -1){
+        printf("BRUH finding ip failed!!\n");
+        return;
+      }
+    }
+    
+
+    // now let's check ip metadata
+    if (trackers[tracker_id].state == -1 && trackers[tracker_id].prev_addr == 0){ // new ip found
+      trackers[tracker_id].prev_addr = addr>>LOG2_BLOCK_SIZE;
+    }
+    else if (trackers[tracker_id].state == -1 && trackers[tracker_id].prev_addr != 0){ // enter transient state time
+      trackers[tracker_id].stride = (addr>>LOG2_BLOCK_SIZE) - trackers[tracker_id].prev_addr;
+      trackers[tracker_id].state = 0; // enter transient state
+      trackers[tracker_id].prev_addr = (addr>>LOG2_BLOCK_SIZE) ;
+      trackers[tracker_id].rrip = 0;
+    }
+    else if (trackers[tracker_id].state == 0){
+      if ((addr>>LOG2_BLOCK_SIZE)  - trackers[tracker_id].prev_addr == trackers[tracker_id].stride){ //stride matches! lessgoo
+        trackers[tracker_id].state = 1; // solid prefetching confidence
+      }
+      else{
+        trackers[tracker_id].stride = (addr>>LOG2_BLOCK_SIZE)  - trackers[tracker_id].prev_addr;
+        trackers[tracker_id].prev_addr = (addr>>LOG2_BLOCK_SIZE) ;
+        // state remains 0
+      }
+      trackers[tracker_id].rrip = 0;
+    }
+    else if (trackers[tracker_id].state == 1){
+      if ((addr>>LOG2_BLOCK_SIZE)  - trackers[tracker_id].prev_addr == trackers[tracker_id].stride){ //stride matches! lessgoo
+        //state = 1 remains
+      }
+      else{
+        trackers[tracker_id].stride = (addr>>LOG2_BLOCK_SIZE)  - trackers[tracker_id].prev_addr;
+        trackers[tracker_id].prev_addr = (addr>>LOG2_BLOCK_SIZE) ;
+        trackers[tracker_id].state = 0; //go back to transient
+      }
+      trackers[tracker_id].rrip = 0;
+    }
+
+    if (trackers[tracker_id].state != 1)
+      return; //no prefetching plz.
+
+    
+    int64_t stride = trackers[tracker_id].stride;
+    
+    for (int i=1; i<=PREFETCH_DEGREE; i++) {
+      uint64_t cl_addr = (addr ) >> LOG2_BLOCK_SIZE;
+      uint64_t pf_address = (cl_addr + i * stride)<< LOG2_BLOCK_SIZE;
+
+      // only issue a prefetch if the prefetch address is in the same 4 KB page
+      // as the current demand access address
+      if ((pf_address >> LOG2_PAGE_SIZE) != (addr >> LOG2_PAGE_SIZE))
+        break;
+      
+      //printf("PREFETCHING!!\n");
+      prefetch_line(ip, addr, pf_address, FILL_L1, 0);
+    }
+
+    return;
+}
+
+// ------------------------- DO NOT CHANGE -------------------------------- //
+void CACHE::l1d_prefetcher_cache_fill(uint64_t v_addr, uint64_t addr, uint32_t set, uint32_t way, uint8_t prefetch, uint64_t v_evicted_addr, uint64_t evicted_addr, uint32_t metadata_in)
+{
+	return;
+}
+
+void CACHE::l1d_prefetcher_final_stats()
+{
+	cout << "CPU " << cpu << " L1D IP-based stride prefetcher final stats" << endl;
+	cout << "Degree: " << PREFETCH_DEGREE << endl;
+}
+// ------------------------- DO NOT CHANGE -------------------------------- //

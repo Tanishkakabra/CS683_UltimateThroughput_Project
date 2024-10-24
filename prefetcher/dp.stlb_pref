@@ -2,7 +2,7 @@
 
 // ------------------------- DO NOT CHANGE -------------------------------- //
 #define NUM_IP_TABLE_ENTRIES 1024 // IP table entries
-#define PREFETCH_DEGREE 5         // Prefetch degree
+#define PREFETCH_DEGREE 4         // Prefetch degree
 // ------------------------- DO NOT CHANGE -------------------------------- //
 
 // ------------ YOU CAN CHANGE THE IP_TABLE FOR YOU DESIGN ---------------- //
@@ -73,16 +73,14 @@ void CACHE::stlb_prefetcher_initialize()
 // --------------- This is the main prefetcher operate function ---------------- // 
 void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint64_t prefetch_id, uint8_t instruction)
 {
-  // printf("Hello\n");
     uint16_t tracker_id = find_index(ip, cpu);
     uint64_t sign = trackers_cplx[cpu][tracker_id].signature;
     uint64_t prev_addr = trackers_cplx[cpu][tracker_id].prev_addr;
-    int64_t true_stride = (addr >> LOG2_BLOCK_SIZE) - prev_addr;
-    trackers_cplx[cpu][tracker_id].prev_addr = (addr >> LOG2_BLOCK_SIZE);
+    int64_t true_stride = (addr) - prev_addr;
+    trackers_cplx[cpu][tracker_id].prev_addr = (addr );
     trackers_cplx[cpu][tracker_id].signature = update_sig_l1(sign, true_stride);
     if (prev_addr == 0)
         return;
-    // printf("Hoho\n");
 
     stride_map[sign].confidence = update_conf(true_stride, stride_map[sign].stride, stride_map[sign].confidence);
     if (stride_map[sign].confidence <= 0)
@@ -94,16 +92,26 @@ void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hi
     sign = trackers_cplx[cpu][tracker_id].signature;
     if (stride_map[sign].confidence <= 0)
         return;
-    // printf("Hehe\n");
+
     int64_t stride = stride_map[sign].stride;
 
+    int64_t sum = 0;
     for (int i = 1; i <= PREFETCH_DEGREE; i++)
-    {
-        uint64_t cl_addr = (addr) >> LOG2_BLOCK_SIZE;
-        uint64_t pf_address = (cl_addr + i * stride) << LOG2_BLOCK_SIZE;
+    {   
+        sum += stride;
+        uint64_t cl_addr = (addr + stride) >> LOG2_BLOCK_SIZE;
+        uint64_t pf_address = (cl_addr) << LOG2_BLOCK_SIZE;
 
         //printf("PREFETCHING!!\n");
         prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
+        sign = update_sig_l1(sign, stride);
+        if (stride_map[sign].confidence > 0){
+          stride = stride_map[sign].stride;
+        }
+        else{
+          break;
+        }
+        //printf("Prefetching for i = %d\n", i);
     }
     // printf("Successful\n");
     return;

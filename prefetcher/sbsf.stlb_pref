@@ -1,0 +1,126 @@
+#include "cache.h"
+
+// ------------------------- DO NOT CHANGE -------------------------------- //
+#define NUM_IP_TABLE_ENTRIES 1024   // IP table entries
+#define PREFETCH_DEGREE 4           // Prefetch degree
+#define MAX_FREE_DISTANCE 14        // Number of free distances
+#define PQ_SIZE 64                  // Prefetch Queue size
+#define SBFP_THRESHOLD 2  
+uint16_t prime_hash = 31;        // Threshold for useful prefetching
+// ------------------------- DO NOT CHANGE -------------------------------- //
+
+// ------------------------ SBFP-specific Structures ----------------------- //
+
+struct FDTEntry {
+    int confidence = 0;             // Confidence of prefetch success
+};
+
+struct PQEntry {
+    uint64_t virtual_page;
+    uint64_t physical_page;
+    int free_distance;
+};
+
+class SBFP_TABLE {
+public:
+    uint64_t ip_tag;
+    uint64_t prev_addr;
+
+    void init(uint64_t ip_tag1) {
+        ip_tag = ip_tag1;
+        prev_addr = 0;
+    }
+};
+
+// Prefetch Queue and Free Distance Table for SBFP
+SBFP_TABLE trackers_sbfp[NUM_CPUS][NUM_IP_TABLE_ENTRIES];
+FDTEntry fdt[MAX_FREE_DISTANCE];
+PQEntry pq[PQ_SIZE];
+int pq_head = 0, pq_size = 0;
+
+// ---------------------- Helper Functions for SBFP ----------------------- //
+
+// Update FDT confidence based on success/failure of prefetch
+void update_fdt_confidence(int free_distance, bool hit) {
+    if (hit) {
+        fdt[free_distance].confidence++;
+    } else {
+        fdt[free_distance].confidence--;
+    }
+    fdt[free_distance].confidence = std::max(0, fdt[free_distance].confidence);
+}
+
+// Find or initialize a tracker entry for an IP
+uint16_t find_sbfp_index(uint64_t ip, int cpu) {
+    uint16_t id = ip * prime_hash % NUM_IP_TABLE_ENTRIES;
+    if (trackers_sbfp[cpu][id].ip_tag == ip) {
+        return id;
+    } else {
+        trackers_sbfp[cpu][id].init(ip);
+        return id;
+    }
+}
+
+// Add a PTE entry to the Prefetch Queue
+void add_to_pq(uint64_t vpage, uint64_t ppage, int free_distance) {
+    if (pq_size >= PQ_SIZE) {
+        pq_head = (pq_head + 1) % PQ_SIZE; // Remove oldest entry if PQ is full
+    } else {
+        pq_size++;
+    }
+    pq[(pq_head + pq_size - 1) % PQ_SIZE] = {vpage, ppage, free_distance};
+}
+
+// Check if the Prefetch Queue contains a specific virtual page
+bool pq_contains(uint64_t vpage) {
+    for (int i = 0; i < pq_size; i++) {
+        int idx = (pq_head + i) % PQ_SIZE;
+        if (pq[idx].virtual_page == vpage) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// ------------------------- Initialize the prefetcher ------------------------- //
+void CACHE::stlb_prefetcher_initialize() {
+    cout << "CPU " << cpu << " STLB SBFP prefetcher initialized" << endl;
+}
+
+// --------------- Main SBFP Prefetcher Operate Function ----------------------- //
+void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint64_t prefetch_id, uint8_t instruction) {
+    uint16_t tracker_id = find_sbfp_index(ip, cpu);
+    uint64_t prev_addr = trackers_sbfp[cpu][tracker_id].prev_addr;
+    int64_t true_stride = addr - prev_addr;
+    trackers_sbfp[cpu][tracker_id].prev_addr = addr;
+
+    if (prev_addr == 0) return; // No previous address to calculate distance
+
+    // Try prefetching based on free distance
+    for (int dist = -7; dist <= 7; dist++) {
+        if (dist == 0) continue; // Skip zero distance (current demand)
+
+        uint64_t vpage = addr + dist;  // Calculate virtual page for this distance
+        bool hit = pq_contains(vpage); 
+        
+        update_fdt_confidence(dist + 7, hit); // Offset for array index
+
+        // Add useful prefetches to PQ
+        if (fdt[dist + 7].confidence >= SBFP_THRESHOLD && !hit) {
+            add_to_pq(vpage, 0, dist); // Physical page unknown here
+            uint64_t pf_address = vpage << LOG2_BLOCK_SIZE;
+            prefetch_translation(ip, pf_address, 2, 0, prefetch_id, instruction);
+        }
+    }
+    return;
+}
+
+// --------------------- Functions to Handle Cache Events --------------------- //
+void CACHE::stlb_prefetcher_cache_fill(uint64_t addr, uint32_t set, uint32_t way, uint8_t prefetch, uint64_t evicted_addr, uint32_t metadata_in) {
+    return; // For simplicity, no action taken on cache fill
+}
+
+void CACHE::stlb_prefetcher_final_stats() {
+    cout << "CPU " << cpu << " STLB SBFP prefetcher final stats" << endl;
+    cout << "Prefetch Degree: " << PREFETCH_DEGREE << endl;
+}

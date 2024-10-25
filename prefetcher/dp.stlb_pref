@@ -8,7 +8,9 @@
 // ------------ YOU CAN CHANGE THE IP_TABLE FOR YOU DESIGN ---------------- //
 
 uint16_t prime_hash = 31;
+
 #define n 10
+
 
 class IP_TABLE
 {

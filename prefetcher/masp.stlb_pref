@@ -1,0 +1,134 @@
+#include "cache.h"
+
+// ------------------------- DO NOT CHANGE -------------------------------- //
+#define IP_TRACKER_COUNT 64           // Number of IP trackers1
+// ------------------------- DO NOT CHANGE -------------------------------- //
+
+#define PREFETCH_DEGREE 8           // Prefetch degree - you need to vary this!
+
+class IP_TRACKER {
+  public:
+    // ------------------------- Define the IP_TRACKER class here ------------------------- //
+    uint64_t ip = -1;
+    int64_t stride = 0; //useless if state = -1. 0 -> 1 if prev stride = new stride. 1 -> 0 if prev stride != new stride
+    uint64_t prev_addr = 0;
+    uint8_t rrip = 2; //2 at init hehe
+
+    void init(uint64_t ip1, int64_t stride1 = 0, int state1 = -1, uint64_t prev_addr1 = 0, uint8_t rrip1 = 2){
+      ip = ip1;
+      stride = stride1;
+      prev_addr = prev_addr1;
+      rrip = rrip1;
+    }
+};
+
+IP_TRACKER trackers1[IP_TRACKER_COUNT];
+
+
+int find_empty_tracker_index_asp(){
+  int max_rrip = -1;
+  if (trackers1[IP_TRACKER_COUNT-1].ip != -1){ //need to evict one ip
+    //printf("need to evict 1\n");
+    for (int i = 0; i < IP_TRACKER_COUNT; i++){
+      if (trackers1[i].rrip == 3)
+        return i;
+      if (trackers1[i].rrip > max_rrip)
+        max_rrip = trackers1[i].rrip;
+    }
+    // no rrip 3 exists.
+    int ans = -1;
+    for (int i = 0; i < IP_TRACKER_COUNT; i++){
+      trackers1[i].rrip += (3 - max_rrip);
+      if (trackers1[i].rrip == 3)
+          ans = i;
+    }
+    return ans;
+  }
+  else{
+    for (int i = 0; i < IP_TRACKER_COUNT; i++){
+      if (trackers1[i].ip == -1)
+        return i;
+    }
+  }
+  return -1;
+}
+
+int find_this_ip_asp(uint64_t ip){
+  //printf("To begin: \n");
+  for (int i = 0; i < IP_TRACKER_COUNT; i++){
+    //printf("IP in table = %d %d \n", trackers1[i].ip, trackers1[i].state);
+    if (trackers1[i].ip == ip)
+      return i;
+  }
+  return -1;
+}
+
+// ------------------------- Initialize the prefetcher ------------------------- // 
+void CACHE::stlb_prefetcher_initialize() 
+{
+	cout << "CPU " << cpu << " STLB arbitrary stride prefetcher" << endl;
+
+}
+
+// --------------- This is the main prefetcher operate function ---------------- // 
+void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint64_t prefetch_id, uint8_t instruction)
+{
+    // ------------------------ Add Arbitrary Stride pf_address logic here ----------------------- // 
+    //printf("%d %d %d %d %d \n", addr, ip, cache_hit, type, critical_ip_flag);
+    //                      -83624712 4208293 0        0     0 
+    //                      7126080   4208374 1        0     0 
+
+
+    
+    int tracker_id = find_this_ip_asp(ip);
+    if (tracker_id == -1){ // this ip doesnt yet exist on the list
+      tracker_id = find_empty_tracker_index_asp();
+      trackers1[tracker_id].init(ip);
+      if (tracker_id == -1){
+        printf("BRUH finding ip failed!!\n");
+        return;
+      }
+    }
+    
+    if (trackers1[tracker_id].prev_addr == 0){
+      trackers1[tracker_id].prev_addr = addr;
+      return;
+    }
+    else if (trackers1[tracker_id].prev_addr == addr){
+      return;
+    }
+    else{
+      trackers1[tracker_id].rrip = 0;
+      int64_t new_stride = addr - trackers1[tracker_id].prev_addr;
+      uint64_t cl_addr = (addr + new_stride) >> LOG2_BLOCK_SIZE;
+      uint64_t pf_address = cl_addr << LOG2_BLOCK_SIZE;
+      prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
+
+      if (trackers1[tracker_id].stride != new_stride && trackers1[tracker_id].stride != 0){
+        cl_addr = (addr + trackers1[tracker_id].stride) >> LOG2_BLOCK_SIZE;
+        pf_address = cl_addr << LOG2_BLOCK_SIZE;
+        prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
+      }
+      trackers1[tracker_id].stride = new_stride;
+      trackers1[tracker_id].prev_addr = addr;
+      
+    }
+    
+
+    // 
+    
+    return;
+}
+
+// ------------------------- DO NOT CHANGE -------------------------------- //
+void CACHE::stlb_prefetcher_cache_fill(uint64_t addr, uint32_t set, uint32_t way, uint8_t prefetch, uint64_t evicted_addr, uint32_t metadata_in)
+{
+    return;
+}
+
+void CACHE::stlb_prefetcher_final_stats()
+{
+    cout << "CPU " << cpu << " STLB arbitrary stride prefetcher final stats" << endl;
+	cout << "Degree: " << PREFETCH_DEGREE << endl;
+}
+// ------------------------- DO NOT CHANGE -------------------------------- //

@@ -1,0 +1,456 @@
+#include "cache.h"
+
+// ------------------------- DO NOT CHANGE -------------------------------- //
+#define NUM_stp_TABLE_L1_ENTRIES 1024 // IP table entries
+#define IP_TRACKER_COUNT 64           // Number of IP trackers
+#define PREFETCH_DEGREE 5             // Prefetch degree
+// ------------------------- DO NOT CHANGE -------------------------------- //
+
+#define PHASE_LENGTH 200
+#define PREF_TABLE_LEN 64 // Choose an appropriate phase length
+#define n 10
+#define prime_hash 37
+uint64_t num_prefs = 0; // To keep a track of the number of prefetched lines
+
+// Track the accuracy of the different prefetchers
+double conf_stp = 0;
+double conf_masp = 0;
+double conf_h2p = 0;
+
+uint32_t hit_stp = 0;
+uint32_t hit_masp = 0;
+uint32_t hit_h2p = 0;
+uint32_t ctr_stp = 0;
+uint32_t ctr_masp = 0;
+uint32_t ctr_h2p = 0;
+
+#define IP_STRIDE 1 // IP-Stride Prefetcher
+#define CPLX 2      // Complex-Stride Prefetcher
+#define NL 3        // Next-line Prefetcher
+
+uint16_t phase_ctr = 0;
+
+class IP_TRACKER
+{
+public:
+  // ------------------------- Define the IP_TRACKER class here ------------------------- //
+  uint64_t ip = -1;
+  int64_t stride = 0; // useless if state = -1. 0 -> 1 if prev stride = new stride. 1 -> 0 if prev stride != new stride
+  uint64_t prev_addr = 0;
+  uint8_t rrip = 2; // 2 at init hehe
+
+  void init(uint64_t ip1, int64_t stride1 = 0, int state1 = -1, uint64_t prev_addr1 = 0, uint8_t rrip1 = 2)
+  {
+    ip = ip1;
+    stride = stride1;
+    prev_addr = prev_addr1;
+    rrip = rrip1;
+  }
+};
+
+IP_TRACKER trackers1[IP_TRACKER_COUNT];
+
+int find_empty_tracker_index_asp()
+{
+  int max_rrip = -1;
+  if (trackers1[IP_TRACKER_COUNT - 1].ip != -1)
+  { // need to evict one ip
+    // printf("need to evict 1\n");
+    for (int i = 0; i < IP_TRACKER_COUNT; i++)
+    {
+      if (trackers1[i].rrip == 3)
+        return i;
+      if (trackers1[i].rrip > max_rrip)
+        max_rrip = trackers1[i].rrip;
+    }
+    // no rrip 3 exists.
+    int ans = -1;
+    for (int i = 0; i < IP_TRACKER_COUNT; i++)
+    {
+      trackers1[i].rrip += (3 - max_rrip);
+      if (trackers1[i].rrip == 3)
+        ans = i;
+    }
+    return ans;
+  }
+  else
+  {
+    for (int i = 0; i < IP_TRACKER_COUNT; i++)
+    {
+      if (trackers1[i].ip == -1)
+        return i;
+    }
+  }
+  return -1;
+}
+
+int find_this_ip_asp(uint64_t ip)
+{
+  // printf("To begin: \n");
+  for (int i = 0; i < IP_TRACKER_COUNT; i++)
+  {
+    // printf("IP in table = %d %d \n", trackers1[i].ip, trackers1[i].state);
+    if (trackers1[i].ip == ip)
+      return i;
+  }
+  return -1;
+}
+
+/* Prefecth Table */
+
+class PREF_Table_entry
+{
+public:
+  // useful for complex
+  uint64_t cache_addr = -1;
+  uint8_t rrip = 2; // Stride
+  // useful for ip_stride
+
+  void init(uint64_t addr, uint8_t rrip1 = 2)
+  {
+    cache_addr = addr;
+    rrip = rrip1;
+  }
+};
+
+PREF_Table_entry stp_table[PREF_TABLE_LEN];
+PREF_Table_entry h2p_table[PREF_TABLE_LEN];
+PREF_Table_entry masp_table[PREF_TABLE_LEN];
+
+void look_up_stp(uint64_t cache_addr)
+{
+  for (int i = 0; i < PREF_TABLE_LEN; i++)
+  {
+    if (stp_table[i].cache_addr == cache_addr)
+    {
+      hit_stp++;
+      if (ctr_stp != 0)
+        conf_stp = hit_stp * 1.0 / PHASE_LENGTH;
+      stp_table[i].cache_addr = -1;
+      return;
+    }
+  }
+}
+
+void look_up_h2p(uint64_t cache_addr)
+{
+  for (int i = 0; i < PREF_TABLE_LEN; i++)
+  {
+    if (h2p_table[i].cache_addr == cache_addr)
+    {
+      hit_h2p++;
+      if (ctr_h2p != 0)
+        conf_h2p = hit_h2p * 1.0 / PHASE_LENGTH;
+      h2p_table[i].cache_addr = -1;
+      return;
+    }
+  }
+}
+
+void look_up_masp(uint64_t cache_addr)
+{
+  for (int i = 0; i < PREF_TABLE_LEN; i++)
+  {
+    if (masp_table[i].cache_addr == cache_addr)
+    {
+      hit_masp++;
+      if (ctr_masp != 0)
+        conf_masp = hit_masp * 1.0 / PHASE_LENGTH;
+      masp_table[i].cache_addr = -1;
+      return;
+    }
+  }
+}
+
+void upstp_table(uint64_t cache_addr)
+{
+  for (int i = 0; i < PREF_TABLE_LEN; i++)
+  {
+    if (stp_table[i].cache_addr == cache_addr)
+    {
+      stp_table[i].rrip = 0;
+      return;
+    }
+  }
+  // nhi mili cache_addr;;
+  ctr_stp++;
+  for (int i = 0; i < PREF_TABLE_LEN; i++)
+  {
+    if (stp_table[i].cache_addr == -1)
+    {
+      stp_table[i].init(cache_addr);
+      return;
+    }
+  }
+  // eviction
+
+  int max_rrip = -1; // need to evict one ip
+  // printf("need to evict 1\n");
+  for (int i = 0; i < PREF_TABLE_LEN; i++)
+  {
+    if (stp_table[i].rrip == 3)
+    {
+      stp_table[i].init(cache_addr);
+      return;
+    }
+    if (stp_table[i].rrip > max_rrip)
+      max_rrip = stp_table[i].rrip;
+  }
+  // no rrip 3 exists.
+  int ans = -1;
+  for (int i = 0; i < PREF_TABLE_LEN; i++)
+  {
+    stp_table[i].rrip += (3 - max_rrip);
+    if (stp_table[i].rrip == 3)
+    {
+      ans = i;
+    }
+  }
+
+  stp_table[ans].init(cache_addr);
+}
+void uph2p_table(uint64_t cache_addr)
+{
+  for (int i = 0; i < PREF_TABLE_LEN; i++)
+  {
+    if (h2p_table[i].cache_addr == cache_addr)
+    {
+      h2p_table[i].rrip = 0;
+      return;
+    }
+  }
+  // nhi mili cache_addr;;
+  ctr_h2p++;
+  for (int i = 0; i < PREF_TABLE_LEN; i++)
+  {
+    if (h2p_table[i].cache_addr == -1)
+    {
+      h2p_table[i].init(cache_addr);
+      return;
+    }
+  }
+  // eviction
+
+  int max_rrip = -1; // need to evict one ip
+  // printf("need to evict 1\n");
+  for (int i = 0; i < PREF_TABLE_LEN; i++)
+  {
+    if (h2p_table[i].rrip == 3)
+    {
+      h2p_table[i].init(cache_addr);
+      return;
+    }
+    if (h2p_table[i].rrip > max_rrip)
+      max_rrip = h2p_table[i].rrip;
+  }
+  // no rrip 3 exists.
+  int ans = -1;
+  for (int i = 0; i < PREF_TABLE_LEN; i++)
+  {
+    h2p_table[i].rrip += (3 - max_rrip);
+    if (h2p_table[i].rrip == 3)
+    {
+      ans = i;
+    }
+  }
+
+  h2p_table[ans].init(cache_addr);
+}
+void upmasp_table(uint64_t cache_addr)
+{
+  for (int i = 0; i < PREF_TABLE_LEN; i++)
+  {
+    if (masp_table[i].cache_addr == cache_addr)
+    {
+      masp_table[i].rrip = 0;
+      return;
+    }
+  }
+  // nhi mili cache_addr;;
+  ctr_masp++;
+  for (int i = 0; i < PREF_TABLE_LEN; i++)
+  {
+    if (masp_table[i].cache_addr == -1)
+    {
+      masp_table[i].init(cache_addr);
+      return;
+    }
+  }
+  // eviction
+
+  int max_rrip = -1; // need to evict one ip
+  // printf("need to evict 1\n");
+  for (int i = 0; i < PREF_TABLE_LEN; i++)
+  {
+    if (masp_table[i].rrip == 3)
+    {
+      masp_table[i].init(cache_addr);
+      return;
+    }
+    if (masp_table[i].rrip > max_rrip)
+      max_rrip = masp_table[i].rrip;
+  }
+  // no rrip 3 exists.
+  int ans = -1;
+  for (int i = 0; i < PREF_TABLE_LEN; i++)
+  {
+    masp_table[i].rrip += (3 - max_rrip);
+    if (masp_table[i].rrip == 3)
+    {
+      ans = i;
+    }
+  }
+
+  masp_table[ans].init(cache_addr);
+}
+
+uint64_t prev_prev = 0;
+uint64_t prevv = 0;
+
+/*Good Old Prefetching */
+
+// average calculation bhi effedup hai;
+// ------------------------- Initialize the prefetcher ------------------------- //
+void CACHE::stlb_prefetcher_initialize()
+{
+  cout << "CPU " << cpu << " STLB arbitrary stride prefetcher" << endl;
+}
+
+// --------------- This is the main prefetcher operate function ---------------- //
+void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint64_t prefetch_id, uint8_t instruction)
+{
+  // Define nl_pref logic here
+  auto stp_pref = [&](bool flag = false)
+  {
+    phase_ctr++;
+    if (!cache_hit)
+    {
+      if (flag)
+        prefetch_translation(ip, ((addr >> LOG2_PAGE_SIZE) - 2) << LOG2_PAGE_SIZE, (int)2, 0, prefetch_id, instruction);
+      if (flag)
+        prefetch_translation(ip, ((addr >> LOG2_PAGE_SIZE) - 1) << LOG2_PAGE_SIZE, (int)2, 0, prefetch_id, instruction);
+      if (flag)
+        prefetch_translation(ip, ((addr >> LOG2_PAGE_SIZE) + 1) << LOG2_PAGE_SIZE, (int)2, 0, prefetch_id, instruction);
+      if (flag)
+        prefetch_translation(ip, ((addr >> LOG2_PAGE_SIZE) + 2) << LOG2_PAGE_SIZE, (int)2, 0, prefetch_id, instruction);
+    }
+    upstp_table(addr >> LOG2_PAGE_SIZE);
+  };
+
+  auto h2p_pref = [&](bool flag = false)
+  {
+    if (cache_hit)
+    {
+      return;
+    }
+    else if (prev_prev == 0)
+    {
+      prev_prev = addr;
+      return;
+    }
+    else if (prevv == 0)
+    {
+      prevv = addr;
+      return;
+    }
+    else
+    {
+      uint64_t pf_address = addr + (addr - prev_prev);
+      if (flag)
+        prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
+      pf_address = addr + (addr - prevv);
+      if (flag)
+        prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
+      prev_prev = prevv;
+      prevv = addr;
+    }
+
+    uph2p_table(addr >> LOG2_PAGE_SIZE);
+  };
+
+  auto masp_pref = [&](bool flag = false)
+  {
+    // ------------------------ Add Arbitrary Stride pf_address logic here ----------------------- //
+    // printf("%d %d %d %d %d \n", addr, ip, cache_hit, type, critical_ip_flag);
+    //                      -83624712 4208293 0        0     0
+    //                      7126080   4208374 1        0     0
+
+    int tracker_id = find_this_ip_asp(ip);
+    if (tracker_id == -1)
+    { // this ip doesnt yet exist on the list
+      tracker_id = find_empty_tracker_index_asp();
+      trackers1[tracker_id].init(ip);
+      if (tracker_id == -1)
+      {
+        printf("BRUH finding ip failed!!\n");
+        return;
+      }
+    }
+
+    if (trackers1[tracker_id].prev_addr == 0)
+    {
+      trackers1[tracker_id].prev_addr = addr;
+      return;
+    }
+    else if (trackers1[tracker_id].prev_addr == addr)
+    {
+      return;
+    }
+    else
+    {
+      trackers1[tracker_id].rrip = 0;
+      int64_t new_stride = addr - trackers1[tracker_id].prev_addr;
+      uint64_t cl_addr = (addr + new_stride) >> LOG2_BLOCK_SIZE;
+      uint64_t pf_address = cl_addr << LOG2_BLOCK_SIZE;
+      if (flag)
+        prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
+
+      if (trackers1[tracker_id].stride != new_stride && trackers1[tracker_id].stride != 0)
+      {
+        cl_addr = (addr + trackers1[tracker_id].stride) >> LOG2_BLOCK_SIZE;
+        pf_address = cl_addr << LOG2_BLOCK_SIZE;
+        if (flag)
+          prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
+      }
+      trackers1[tracker_id].stride = new_stride;
+      trackers1[tracker_id].prev_addr = addr;
+    }
+
+    upmasp_table(addr >> LOG2_PAGE_SIZE);
+
+    return;
+  };
+
+  // Actual logic in l1d_prefetcher_operate
+
+  look_up_stp(addr >> LOG2_PAGE_SIZE);
+  stp_pref();
+  look_up_h2p(addr >> LOG2_PAGE_SIZE);
+  h2p_pref();
+  look_up_masp(addr >> LOG2_PAGE_SIZE);
+  masp_pref();
+
+  // cout << "accuracy values" << conf_masp << " " << conf_stp << " " << conf_h2p;
+  if (conf_masp >= conf_stp && conf_masp >= conf_h2p)
+    masp_pref(true);
+  else if (conf_stp >= conf_h2p)
+    stp_pref(true);
+  else
+    h2p_pref(true);
+
+  phase_ctr++;
+  if(phase_ctr%1000)cout<<conf_stp<<" "<<conf_masp<<" "<<conf_h2p<<"\n";
+}
+
+// ------------------------- DO NOT CHANGE -------------------------------- //
+void CACHE::stlb_prefetcher_cache_fill(uint64_t addr, uint32_t set, uint32_t way, uint8_t prefetch, uint64_t evicted_addr, uint32_t metadata_in)
+{
+  return;
+}
+
+void CACHE::stlb_prefetcher_final_stats()
+{
+  cout << "CPU " << cpu << " STLB arbitrary stride prefetcher final stats" << endl;
+  cout << "Degree: " << PREFETCH_DEGREE << endl;
+}
+// ------------------------- DO NOT CHANGE -------------------------------- //

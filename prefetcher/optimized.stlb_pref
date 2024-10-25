@@ -123,6 +123,7 @@ void look_up_stp(uint64_t cache_addr)
   {
     if (stp_table[i].cache_addr == cache_addr)
     {
+      // cout << "hit stp\n";
       hit_stp++;
       if (ctr_stp != 0)
         conf_stp = hit_stp * 1.0 / ctr_stp;
@@ -136,8 +137,10 @@ void look_up_h2p(uint64_t cache_addr)
 {
   for (int i = 0; i < PREF_TABLE_LEN; i++)
   {
+    // cout << masp_table[i].cache_addr << " ughmasp " << cache_addr << "\n";
     if (h2p_table[i].cache_addr == cache_addr)
     {
+      // cout << "hit h2p\n";
       hit_h2p++;
       if (ctr_h2p != 0)
         conf_h2p = hit_h2p * 1.0 / ctr_h2p;
@@ -151,8 +154,10 @@ void look_up_masp(uint64_t cache_addr)
 {
   for (int i = 0; i < PREF_TABLE_LEN; i++)
   {
+    // cout << masp_table[i].cache_addr << " ughmasp " << cache_addr << "\n";
     if (masp_table[i].cache_addr == cache_addr)
     {
+      // cout << "hit masp\n";
       hit_masp++;
       if (ctr_masp != 0)
         conf_masp = hit_masp * 1.0 / ctr_masp;
@@ -164,6 +169,7 @@ void look_up_masp(uint64_t cache_addr)
 
 void upstp_table(uint64_t cache_addr)
 {
+  // cout << "updating stp table\n";
   for (int i = 0; i < PREF_TABLE_LEN; i++)
   {
     if (stp_table[i].cache_addr == cache_addr)
@@ -211,6 +217,7 @@ void upstp_table(uint64_t cache_addr)
 }
 void uph2p_table(uint64_t cache_addr)
 {
+  // cout << "updating h2p table\n";
   for (int i = 0; i < PREF_TABLE_LEN; i++)
   {
     if (h2p_table[i].cache_addr == cache_addr)
@@ -258,6 +265,7 @@ void uph2p_table(uint64_t cache_addr)
 }
 void upmasp_table(uint64_t cache_addr)
 {
+  // cout << "updating masp table\n";
   for (int i = 0; i < PREF_TABLE_LEN; i++)
   {
     if (masp_table[i].cache_addr == cache_addr)
@@ -330,13 +338,11 @@ void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hi
       prefetch_translation(ip, ((addr >> LOG2_PAGE_SIZE) + 1) << LOG2_PAGE_SIZE, (int)2, 0, prefetch_id, instruction);
       prefetch_translation(ip, ((addr >> LOG2_PAGE_SIZE) + 2) << LOG2_PAGE_SIZE, (int)2, 0, prefetch_id, instruction);
     }
-    if (!flag)
-    {
-      upstp_table((addr >> LOG2_PAGE_SIZE) - 2);
-      upstp_table((addr >> LOG2_PAGE_SIZE) - 1);
-      upstp_table((addr >> LOG2_PAGE_SIZE) + 1);
-      upstp_table((addr >> LOG2_PAGE_SIZE) + 2);
-    }
+    upstp_table((addr >> LOG2_PAGE_SIZE) - 2);
+    upstp_table((addr >> LOG2_PAGE_SIZE) - 1);
+    upstp_table((addr >> LOG2_PAGE_SIZE) + 1);
+    upstp_table((addr >> LOG2_PAGE_SIZE) + 2);
+
   };
 
   auto h2p_pref = [&](bool flag = false)
@@ -360,17 +366,11 @@ void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hi
       uint64_t pf_address = addr + (addr - prev_prev);
       if (flag)
         prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
-      else
-      {
-        uph2p_table(pf_address);
-      }
+      uph2p_table(pf_address >> LOG2_PAGE_SIZE);
       pf_address = addr + (addr - prevv);
       if (flag)
         prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
-      else
-      {
-        uph2p_table(pf_address);
-      }
+      uph2p_table(pf_address >> LOG2_PAGE_SIZE);
       prev_prev = prevv;
       prevv = addr;
     }
@@ -378,11 +378,6 @@ void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hi
 
   auto masp_pref = [&](bool flag = false)
   {
-    // ------------------------ Add Arbitrary Stride pf_address logic here ----------------------- //
-    // printf("%d %d %d %d %d \n", addr, ip, cache_hit, type, critical_ip_flag);
-    //                      -83624712 4208293 0        0     0
-    //                      7126080   4208374 1        0     0
-
     int tracker_id = find_this_ip_asp(ip);
     if (tracker_id == -1)
     { // this ip doesnt yet exist on the list
@@ -412,50 +407,52 @@ void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hi
       uint64_t pf_address = cl_addr << LOG2_BLOCK_SIZE;
       if (flag)
         prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
-      else
-      {
-        upmasp_table(pf_address);
-      }
+      upmasp_table(pf_address >> LOG2_PAGE_SIZE);
       if (trackers1[tracker_id].stride != new_stride && trackers1[tracker_id].stride != 0)
       {
         cl_addr = (addr + trackers1[tracker_id].stride) >> LOG2_BLOCK_SIZE;
         pf_address = cl_addr << LOG2_BLOCK_SIZE;
         if (flag)
           prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
-        else
-        {
-          upmasp_table(pf_address);
-        }
+        upmasp_table(pf_address >> LOG2_PAGE_SIZE);
       }
       trackers1[tracker_id].stride = new_stride;
       trackers1[tracker_id].prev_addr = addr;
     }
-
-    upmasp_table(addr >> LOG2_PAGE_SIZE);
-
     return;
   };
 
   // Actual logic in l1d_prefetcher_operate
 
   look_up_stp(addr >> LOG2_PAGE_SIZE);
-  stp_pref();
   look_up_h2p(addr >> LOG2_PAGE_SIZE);
-  h2p_pref();
   look_up_masp(addr >> LOG2_PAGE_SIZE);
-  masp_pref();
+
 
   // cout << "accuracy values" << conf_masp << " " << conf_stp << " " << conf_h2p;
-  if (conf_masp >= conf_stp && conf_masp >= conf_h2p)
+  if (conf_masp >= conf_stp && conf_masp >= conf_h2p){
+    stp_pref();
+    h2p_pref();
     masp_pref(true);
-  else if (conf_stp >= conf_h2p)
+  }
+
+  else if (conf_stp >= conf_h2p){
     stp_pref(true);
-  else
+    h2p_pref();
+    masp_pref();
+  }
+  else{
+    stp_pref();
     h2p_pref(true);
+    masp_pref();
+  }
 
   phase_ctr++;
-  if (phase_ctr % 100000 == 0)
-    cout << conf_stp << " " << conf_masp << " " << conf_h2p << "\n";
+  // if (phase_ctr % 100000 == 0){
+  //   cout << conf_stp << " " << conf_masp << " " << conf_h2p << "\n";
+  //   cout << hit_stp << " " << hit_masp << " " << hit_h2p << " meow\n";
+  // }
+    
 }
 
 // ------------------------- DO NOT CHANGE -------------------------------- //
@@ -466,7 +463,7 @@ void CACHE::stlb_prefetcher_cache_fill(uint64_t addr, uint32_t set, uint32_t way
 
 void CACHE::stlb_prefetcher_final_stats()
 {
-  cout << "CPU " << cpu << " STLB arbitrary stride prefetcher final stats" << endl;
+  cout << "CPU " << cpu << " STLB agile stride prefetcher final stats" << endl;
   cout << "Degree: " << PREFETCH_DEGREE << endl;
 }
 // ------------------------- DO NOT CHANGE -------------------------------- //

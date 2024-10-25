@@ -125,7 +125,7 @@ void look_up_stp(uint64_t cache_addr)
     {
       hit_stp++;
       if (ctr_stp != 0)
-        conf_stp = hit_stp * 1.0 / PHASE_LENGTH;
+        conf_stp = hit_stp * 1.0 / ctr_stp;
       stp_table[i].cache_addr = -1;
       return;
     }
@@ -140,7 +140,7 @@ void look_up_h2p(uint64_t cache_addr)
     {
       hit_h2p++;
       if (ctr_h2p != 0)
-        conf_h2p = hit_h2p * 1.0 / PHASE_LENGTH;
+        conf_h2p = hit_h2p * 1.0 / ctr_h2p;
       h2p_table[i].cache_addr = -1;
       return;
     }
@@ -155,7 +155,7 @@ void look_up_masp(uint64_t cache_addr)
     {
       hit_masp++;
       if (ctr_masp != 0)
-        conf_masp = hit_masp * 1.0 / PHASE_LENGTH;
+        conf_masp = hit_masp * 1.0 / ctr_masp;
       masp_table[i].cache_addr = -1;
       return;
     }
@@ -323,18 +323,20 @@ void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hi
   auto stp_pref = [&](bool flag = false)
   {
     phase_ctr++;
-    if (!cache_hit)
+    if (!cache_hit && flag)
     {
-      if (flag)
-        prefetch_translation(ip, ((addr >> LOG2_PAGE_SIZE) - 2) << LOG2_PAGE_SIZE, (int)2, 0, prefetch_id, instruction);
-      if (flag)
-        prefetch_translation(ip, ((addr >> LOG2_PAGE_SIZE) - 1) << LOG2_PAGE_SIZE, (int)2, 0, prefetch_id, instruction);
-      if (flag)
-        prefetch_translation(ip, ((addr >> LOG2_PAGE_SIZE) + 1) << LOG2_PAGE_SIZE, (int)2, 0, prefetch_id, instruction);
-      if (flag)
-        prefetch_translation(ip, ((addr >> LOG2_PAGE_SIZE) + 2) << LOG2_PAGE_SIZE, (int)2, 0, prefetch_id, instruction);
+      prefetch_translation(ip, ((addr >> LOG2_PAGE_SIZE) - 2) << LOG2_PAGE_SIZE, (int)2, 0, prefetch_id, instruction);
+      prefetch_translation(ip, ((addr >> LOG2_PAGE_SIZE) - 1) << LOG2_PAGE_SIZE, (int)2, 0, prefetch_id, instruction);
+      prefetch_translation(ip, ((addr >> LOG2_PAGE_SIZE) + 1) << LOG2_PAGE_SIZE, (int)2, 0, prefetch_id, instruction);
+      prefetch_translation(ip, ((addr >> LOG2_PAGE_SIZE) + 2) << LOG2_PAGE_SIZE, (int)2, 0, prefetch_id, instruction);
     }
-    upstp_table(addr >> LOG2_PAGE_SIZE);
+    if (!flag)
+    {
+      upstp_table((addr >> LOG2_PAGE_SIZE) - 2);
+      upstp_table((addr >> LOG2_PAGE_SIZE) - 1);
+      upstp_table((addr >> LOG2_PAGE_SIZE) + 1);
+      upstp_table((addr >> LOG2_PAGE_SIZE) + 2);
+    }
   };
 
   auto h2p_pref = [&](bool flag = false)
@@ -358,14 +360,20 @@ void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hi
       uint64_t pf_address = addr + (addr - prev_prev);
       if (flag)
         prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
+      else
+      {
+        uph2p_table(pf_address);
+      }
       pf_address = addr + (addr - prevv);
       if (flag)
         prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
+      else
+      {
+        uph2p_table(pf_address);
+      }
       prev_prev = prevv;
       prevv = addr;
     }
-
-    uph2p_table(addr >> LOG2_PAGE_SIZE);
   };
 
   auto masp_pref = [&](bool flag = false)
@@ -404,13 +412,20 @@ void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hi
       uint64_t pf_address = cl_addr << LOG2_BLOCK_SIZE;
       if (flag)
         prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
-
+      else
+      {
+        upmasp_table(pf_address);
+      }
       if (trackers1[tracker_id].stride != new_stride && trackers1[tracker_id].stride != 0)
       {
         cl_addr = (addr + trackers1[tracker_id].stride) >> LOG2_BLOCK_SIZE;
         pf_address = cl_addr << LOG2_BLOCK_SIZE;
         if (flag)
           prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
+        else
+        {
+          upmasp_table(pf_address);
+        }
       }
       trackers1[tracker_id].stride = new_stride;
       trackers1[tracker_id].prev_addr = addr;
@@ -439,7 +454,8 @@ void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hi
     h2p_pref(true);
 
   phase_ctr++;
-  if(phase_ctr%1000)cout<<conf_stp<<" "<<conf_masp<<" "<<conf_h2p<<"\n";
+  if (phase_ctr % 100000 == 0)
+    cout << conf_stp << " " << conf_masp << " " << conf_h2p << "\n";
 }
 
 // ------------------------- DO NOT CHANGE -------------------------------- //

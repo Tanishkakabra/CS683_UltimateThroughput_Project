@@ -1,0 +1,40 @@
+#include "cache.h"
+
+// ------------------------- DO NOT CHANGE -------------------------------- //
+#define IP_TRACKER_COUNT 64           // Number of IP trackers1
+// ------------------------- DO NOT CHANGE -------------------------------- //
+
+#define PREFETCH_DEGREE 8           // Prefetch degree - you need to vary this!
+
+// ------------------------- Initialize the prefetcher ------------------------- // 
+void CACHE::stlb_prefetcher_initialize() 
+{
+	cout << "CPU " << cpu << " STLB arbitrary stride prefetcher" << endl;
+
+}
+
+// --------------- This is the main prefetcher operate function ---------------- // 
+void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint64_t prefetch_id, uint8_t instruction)
+{
+    if(!cache_hit){
+      prefetch_translation(ip, ((addr>>LOG2_PAGE_SIZE)-2)<<LOG2_PAGE_SIZE, (int)2, 0, prefetch_id, instruction);
+      prefetch_translation(ip, ((addr>>LOG2_PAGE_SIZE)-1)<<LOG2_PAGE_SIZE, (int)2, 0, prefetch_id, instruction);
+      prefetch_translation(ip, ((addr>>LOG2_PAGE_SIZE)+1)<<LOG2_PAGE_SIZE, (int)2, 0, prefetch_id, instruction);
+      prefetch_translation(ip, ((addr>>LOG2_PAGE_SIZE)+2)<<LOG2_PAGE_SIZE, (int)2, 0, prefetch_id, instruction);
+    }
+    
+    return;
+}
+
+// ------------------------- DO NOT CHANGE -------------------------------- //
+void CACHE::stlb_prefetcher_cache_fill(uint64_t addr, uint32_t set, uint32_t way, uint8_t prefetch, uint64_t evicted_addr, uint32_t metadata_in)
+{
+    return;
+}
+
+void CACHE::stlb_prefetcher_final_stats()
+{
+    cout << "CPU " << cpu << " STLB arbitrary stride prefetcher final stats" << endl;
+	cout << "Degree: " << PREFETCH_DEGREE << endl;
+}
+// ------------------------- DO NOT CHANGE -------------------------------- //

@@ -10,12 +10,17 @@
 #define PREF_TABLE_LEN 64 // Choose an appropriate phase length
 #define n 10
 #define prime_hash 37
+#define THRESH 32
 uint64_t num_prefs = 0; // To keep a track of the number of prefetched lines
 
 // Track the accuracy of the different prefetchers
 double conf_stp = 0;
 double conf_masp = 0;
 double conf_h2p = 0;
+
+uint64_t win_stp = 0;
+uint64_t win_masp = 0;
+uint64_t win_h2p = 0;
 
 uint32_t hit_stp = 0;
 uint32_t hit_masp = 0;
@@ -119,14 +124,17 @@ PREF_Table_entry masp_table[PREF_TABLE_LEN];
 
 void look_up_stp(uint64_t cache_addr)
 {
+  if((win_stp>>63)&1)conf_stp--;
+  win_stp = (win_stp<<1);
   for (int i = 0; i < PREF_TABLE_LEN; i++)
   {
     if (stp_table[i].cache_addr == cache_addr)
     {
       // cout << "hit stp\n";
       hit_stp++;
+      win_stp +=1;
       if (ctr_stp != 0)
-        conf_stp = hit_stp * 1.0 / ctr_stp;
+        conf_stp ++;
       stp_table[i].cache_addr = -1;
       return;
     }
@@ -135,6 +143,8 @@ void look_up_stp(uint64_t cache_addr)
 
 void look_up_h2p(uint64_t cache_addr)
 {
+  if((win_h2p>>63)&1)conf_h2p--;
+  win_h2p = (win_h2p<<1);
   for (int i = 0; i < PREF_TABLE_LEN; i++)
   {
     // cout << masp_table[i].cache_addr << " ughmasp " << cache_addr << "\n";
@@ -142,16 +152,22 @@ void look_up_h2p(uint64_t cache_addr)
     {
       // cout << "hit h2p\n";
       hit_h2p++;
+      win_h2p +=1;
       if (ctr_h2p != 0)
-        conf_h2p = hit_h2p * 1.0 / ctr_h2p;
+        conf_h2p ++;
       h2p_table[i].cache_addr = -1;
       return;
-    }
+    }  
   }
 }
 
 void look_up_masp(uint64_t cache_addr)
 {
+  if((win_masp>>63)&1){
+    // cout<<(1<<63)<<'\n';
+    conf_masp--;
+  }
+  win_masp = (win_masp<<1);
   for (int i = 0; i < PREF_TABLE_LEN; i++)
   {
     // cout << masp_table[i].cache_addr << " ughmasp " << cache_addr << "\n";
@@ -159,11 +175,13 @@ void look_up_masp(uint64_t cache_addr)
     {
       // cout << "hit masp\n";
       hit_masp++;
+      win_masp +=1;
       if (ctr_masp != 0)
-        conf_masp = hit_masp * 1.0 / ctr_masp;
+        conf_masp ++;
       masp_table[i].cache_addr = -1;
       return;
     }
+    
   }
 }
 
@@ -430,20 +448,25 @@ void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hi
 
 
   // cout << "accuracy values" << conf_masp << " " << conf_stp << " " << conf_h2p;
-  if (conf_masp >= conf_stp && conf_masp >= conf_h2p){
+  if (conf_masp >= conf_stp && conf_masp >= conf_h2p  && conf_masp>= THRESH){
     stp_pref();
     h2p_pref();
     masp_pref(true);
   }
 
-  else if (conf_stp >= conf_h2p){
+  else if (conf_stp >= conf_h2p && conf_stp>= THRESH){
     stp_pref(true);
     h2p_pref();
     masp_pref();
   }
-  else{
+  else if (conf_h2p>= THRESH){
     stp_pref();
     h2p_pref(true);
+    masp_pref();
+  }
+  else{
+    stp_pref();
+    h2p_pref();
     masp_pref();
   }
 

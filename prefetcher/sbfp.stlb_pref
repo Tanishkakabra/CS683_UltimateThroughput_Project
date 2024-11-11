@@ -6,7 +6,7 @@
 #define MAX_FREE_DISTANCE 15        // Number of free distances
 #define PREFETCH_DEGREE 1           // Number of prefetches per request
 #define SBFP_THRESHOLD (1 << 10)  
-#define PREF_THRESHOLD 100
+#define PREF_THRESHOLD 300
 
 // ------------------------ SBFP-specific Structures ----------------------- //
 int count = 0;
@@ -76,7 +76,7 @@ void CACHE::stlb_prefetcher_initialize() {
 
 // --------------- Main SBFP Prefetcher Operate Function ----------------------- //
 void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint64_t prefetch_id, uint8_t instruction) {
-    int offset = (ooo_cpu[cpu].PTW.get_offset(addr, IS_PTL1) >> LOG2_BLOCK_SIZE);
+    int offset = (ooo_cpu[cpu].PTW.get_offset(addr, IS_PTL1) % 8);
     uint64_t vp = addr >> LOG2_PAGE_SIZE; //easier to index now with page number instead of page address
     int in_sampler_free_distance = find_sampler_free_distance(vp);
     update_fdt(in_sampler_free_distance);

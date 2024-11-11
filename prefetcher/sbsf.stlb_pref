@@ -1,15 +1,12 @@
 #include "cache.h"
-// #include "page_table_walker.h"
 #include "ooo_cpu.h"
 
-// ------------------------- DO NOT CHANGE -------------------------------- //
-#define NUM_SP_TABLE_ENTRIES 1024   // IP table entries
-#define PREFETCH_DEGREE 4           // Prefetch degree
+
+#define NUM_SP_TABLE_ENTRIES 64   // IP table entries
 #define MAX_FREE_DISTANCE 15        // Number of free distances
-// #define PQ_SIZE 64                  // Prefetch Queue size
+#define PREFETCH_DEGREE 1           // Number of prefetches per request
 #define SBFP_THRESHOLD (1 << 10)  
-uint16_t prime_hash = 31;        // Threshold for useful prefetching
-// ------------------------- DO NOT CHANGE -------------------------------- //
+#define PREF_THRESHOLD 100
 
 // ------------------------ SBFP-specific Structures ----------------------- //
 int count = 0;
@@ -32,8 +29,10 @@ FDTEntry fdt[MAX_FREE_DISTANCE]; //-7 to -1, 1 to 7 need to be indexed. So, inde
 
 // ---------------------- Helper Functions for SBFP ----------------------- //
 
-// Update FDT confidence based on success/failure of prefetch
+// Update FDT confidence for a free distance. handles incorrect free distances
 void update_fdt(int free_distance) {
+    if (free_distance >= MAX_FREE_DISTANCE || free_distance < 0) //invalid free distance
+        return;
     if (fdt[free_distance].confidence < SBFP_THRESHOLD)
         fdt[free_distance].confidence++;
     else{
@@ -42,7 +41,7 @@ void update_fdt(int free_distance) {
         fdt[free_distance].confidence++;
     }
 }
-// Find or initialize a tracker entry for an IP
+// find if addr exists in sampler and return free distance
 int find_sampler_free_distance(uint64_t addr){
     for (int i = 0; i < NUM_SP_TABLE_ENTRIES; i++){
         if (sampler[i].vp == addr){
@@ -55,8 +54,8 @@ int find_sampler_free_distance(uint64_t addr){
     return MAX_FREE_DISTANCE;
 }
 
+//find empty entry in sampler and insert addr
 void insert_in_sampler(uint64_t vp, int index){
-    // cout << index << " " << vp << endl;
     for (int i = 0; i < NUM_SP_TABLE_ENTRIES; i++){
         if (sampler[i].vp == 0){ // empty sampler
             sampler[i].free_distance = index;
@@ -68,8 +67,6 @@ void insert_in_sampler(uint64_t vp, int index){
     sampler[count].free_distance = index;
     sampler[count].vp = vp;
     count = (count + 1) % NUM_SP_TABLE_ENTRIES;
-    //no free index found, what to do? 
-    // printf("ono\n");
 }
 
 // ------------------------- Initialize the prefetcher ------------------------- //
@@ -79,25 +76,24 @@ void CACHE::stlb_prefetcher_initialize() {
 
 // --------------- Main SBFP Prefetcher Operate Function ----------------------- //
 void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint64_t prefetch_id, uint8_t instruction) {
-    // i think if cache hit ignore?
+    int offset = (ooo_cpu[cpu].PTW.get_offset(addr, IS_PTL1) >> LOG2_BLOCK_SIZE);
+    uint64_t vp = addr >> LOG2_PAGE_SIZE; //easier to index now with page number instead of page address
+    int in_sampler_free_distance = find_sampler_free_distance(vp);
+    update_fdt(in_sampler_free_distance);
     if (cache_hit)
         return;
-    int offset = (ooo_cpu[cpu].PTW.get_offset(addr, IS_PTL1) >> LOG2_BLOCK_SIZE);
-    uint64_t vp = addr >> LOG2_PAGE_SIZE; //easier to index now
-    //if addr in Sampler, update confidence for that free distance.
-    int in_sampler_free_distance = find_sampler_free_distance(vp);
-    if (in_sampler_free_distance < MAX_FREE_DISTANCE) //free distance valid means addr in sampler
-        update_fdt(in_sampler_free_distance);
     
     // for (int i = 0; i < MAX_FREE_DISTANCE; i++){
     //     cout << fdt[i].confidence << " ";
     // }
     // cout << endl;
+    // cout << "Offset = " << offset << endl;
+
     //add addr ke aaju baaju wale to sampler. if confidence good for someone, prefetch as well
     for (int i = 0; i < offset; i++){// negative free distance; index with +7 anyways
-        if (fdt[i - offset + MAX_FREE_DISTANCE / 2].confidence >= 100){//prefetch
-            if (vp + i - offset <= 0)
-                cout << vp + i - offset << endl;
+        // cout << i - offset + MAX_FREE_DISTANCE / 2 << " " << fdt[i - offset + MAX_FREE_DISTANCE / 2].confidence << endl;
+        if (fdt[i - offset + MAX_FREE_DISTANCE / 2].confidence >= PREF_THRESHOLD){//prefetch
+            // cout << "prefetching " << vp + i - offset << endl;
             prefetch_translation(ip, ((vp + i - offset) << LOG2_PAGE_SIZE), (int)2, 0, prefetch_id, instruction);
         }
         else{//insert aaju baaju ke addresses in sampler
@@ -105,11 +101,11 @@ void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hi
         }
             
     }
-    for (int i = offset+1; i <= MAX_FREE_DISTANCE/2; i++){ //positive free distance
-        if (fdt[i - offset].confidence >= 100){
+    for (int i = offset+1; i <= MAX_FREE_DISTANCE / 2; i++){ //positive free distance
+        // cout << i - offset + MAX_FREE_DISTANCE / 2 << " " << fdt[i - offset + MAX_FREE_DISTANCE / 2].confidence << endl;
+        if (fdt[i - offset + MAX_FREE_DISTANCE / 2].confidence >= PREF_THRESHOLD){
             //prefetch
-            if (vp + i - offset <= 0)
-                cout << vp + i - offset << endl;
+            // cout << "prefetching " << vp + i - offset << endl;
             prefetch_translation(ip, ((vp + i - offset) << LOG2_PAGE_SIZE), (int)2, 0, prefetch_id, instruction);
         }
         else{//insert in sampler
